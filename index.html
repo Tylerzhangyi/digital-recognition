@@ -3,41 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>图像批量上传</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        .container {
-            max-width: 600px;
-            margin: auto;
-        }
-        .upload-area {
-            border: 2px dashed #ccc;
-            padding: 20px;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .upload-area input {
-            margin-top: 10px;
-        }
-        .status {
-            margin-top: 20px;
-            font-size: 14px;
-            color: #555;
-        }
-    </style>
+    <title>图像识别</title>
 </head>
 <body>
-    <div class="container">
-        <h1>批量上传图像进行处理</h1>
-        <div class="upload-area">
-            <p>请选择包含图像的文件夹：</p>
-            <input type="file" id="fileInput" webkitdirectory directory multiple>
-        </div>
-        <div class="status" id="status">等待上传...</div>
-    </div>
+    <h1>上传图片进行识别</h1>
+    <input type="file" id="imageInput" multiple />
+    <button onclick="uploadImages()">上传图片</button>
+    <div id="status"></div>
 
     <script src="app.js"></script>
 </body>

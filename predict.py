@@ -2,17 +2,15 @@ import base64
 import io
 from PIL import Image
 import boto3
-import os
-from dotenv import load_dotenv
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import os
+from dotenv import load_dotenv
 from torchvision import transforms
 
-# 加载环境变量
 load_dotenv()
 
-# 定义模型结构（必须和训练时一样）
+# 模型定义
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -23,111 +21,76 @@ class Net(nn.Module):
         self.fc2 = nn.Linear(50, 10)
 
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = torch.relu(torch.max_pool2d(self.conv1(x), 2))
+        x = torch.relu(torch.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
         x = x.view(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
+        x = torch.relu(self.fc1(x))
+        x = torch.dropout(x, training=self.training)
         x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        return torch.log_softmax(x, dim=1)
 
-# 实例化模型并加载参数
 model = Net()
-print("加载模型参数...")
-model.load_state_dict(torch.load('model.pth', map_location=torch.device('cpu')))
-model.eval()  # 进入推理模式
-print("模型已加载并进入推理模式...")
+model.load_state_dict(torch.load(os.getenv('MODEL_PATH'), map_location=torch.device('cpu')))
+model.eval()
 
-# 定义和训练时一样的图像预处理
 transform = transforms.Compose([
-    transforms.Resize((28, 28)),                # 缩放为28x28
-    transforms.Grayscale(),                     # 灰度图
-    transforms.ToTensor(),                      # 转换为Tensor
-    transforms.Normalize((0.1307,), (0.3081,))  # 归一化
+    transforms.Resize((28, 28)),
+    transforms.Grayscale(),
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))
 ])
-print("图像预处理函数已定义...")
 
-# 初始化 SQS 客户端，使用环境变量获取 AWS 凭证
-def get_sqs_client():
-    try:
-        print("正在初始化 SQS 客户端...")
-        aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-        aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-        region_name = os.getenv('AWS_REGION')
+# 初始化 S3 客户端
+s3 = boto3.client('s3', region_name=os.getenv('AWS_REGION'))
 
-        if not all([aws_access_key_id, aws_secret_access_key, region_name]):
-            raise ValueError("缺少必要的环境变量: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION")
+def save_result_to_s3(image_name, result):
+    """将推理结果保存到 S3"""
+    bucket_name = os.getenv('S3_BUCKET_NAME')
+    file_name = f'results/{image_name}.txt'  # 保存到 results 文件夹中
+    s3.put_object(Bucket=bucket_name, Key=file_name, Body=result)
 
-        sqs = boto3.client(
-            'sqs',
-            region_name=region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key
-        )
-        print("SQS 客户端初始化成功...")
-        return sqs
-    except Exception as e:
-        print(f"初始化 SQS 客户端失败: {e}")
-        raise
-
-# 获取 SQS 客户端
-sqs = get_sqs_client()
-
-# SQS 队列 URL
-queue_url = 'https://sqs.ap-northeast-2.amazonaws.com/961341521760/task.fifo'
-
-# 从 SQS 获取消息并处理图片
 def process_sqs_message():
-    print("开始监听 SQS 消息...")
+    sqs = boto3.client('sqs', region_name=os.getenv('AWS_REGION'))
+    queue_url = os.getenv('SQS_QUEUE_URL')
+
     while True:
-        print("尝试从 SQS 接收消息...")
-        # 从 SQS 接收消息
         response = sqs.receive_message(
             QueueUrl=queue_url,
-            MaxNumberOfMessages=1,  # 每次最多接收一条消息
-            WaitTimeSeconds=10      # 长轮询等待时间
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=10
         )
 
         if 'Messages' not in response:
-            print("没有新消息")
             continue
 
-        print("接收到新消息...")
-        # 提取消息内容
         message = response['Messages'][0]
         receipt_handle = message['ReceiptHandle']
         body = message['Body']
+        image_name = message['MessageAttributes']['ImageName']['StringValue']
 
         try:
-            print("解码 Base64 图片数据...")
             # 解码 Base64 数据
             image_data = base64.b64decode(body)
             image = Image.open(io.BytesIO(image_data))
 
-            print("对图片进行预处理...")
             # 图片预处理
             image = transform(image)
-            image = image.unsqueeze(0)  # 增加 batch 维度，变成 (1, 1, 28, 28)
+            image = image.unsqueeze(0)
 
-            print("开始模型推理...")
             # 推理预测
             with torch.no_grad():
                 output = model(image)
-                pred = output.argmax(dim=1, keepdim=True)
-                print(f"预测结果是：{pred.item()}")
+                pred = output.argmax(dim=1, keepdim=True).item()
+
+            # 保存结果到 S3
+            save_result_to_s3(image_name, f'Predicted label: {pred}')
 
         except Exception as e:
             print(f"处理消息时出错: {e}")
 
         finally:
-            print("删除已处理的消息...")
             # 删除已处理的消息
-            sqs.delete_message(
-                QueueUrl=queue_url,
-                ReceiptHandle=receipt_handle
-            )
-            print("消息已删除")
+            sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
-# 启动消息处理
 if __name__ == "__main__":
     process_sqs_message()
