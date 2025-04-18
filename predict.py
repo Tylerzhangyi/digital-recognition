@@ -1,14 +1,15 @@
+import base64
+import io
+from PIL import Image
+import boto3
+import os
+from dotenv import load_dotenv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
-from PIL import Image
-import boto3
-import base64
-import io
-import os
-from dotenv import load_dotenv
 
+# 加载环境变量
 load_dotenv()
 
 # 定义模型结构（必须和训练时一样）
@@ -22,19 +23,12 @@ class Net(nn.Module):
         self.fc2 = nn.Linear(50, 10)
 
     def forward(self, x):
-        print("开始前向传播...")
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        print("完成第一层卷积和池化...")
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        print("完成第二层卷积和池化...")
         x = x.view(-1, 320)
-        print("完成展平操作...")
         x = F.relu(self.fc1(x))
-        print("完成第一个全连接层...")
         x = F.dropout(x, training=self.training)
-        print("完成 dropout 操作...")
         x = self.fc2(x)
-        print("完成第二个全连接层...")
         return F.log_softmax(x, dim=1)
 
 # 实例化模型并加载参数
@@ -57,7 +51,6 @@ print("图像预处理函数已定义...")
 def get_sqs_client():
     try:
         print("正在初始化 SQS 客户端...")
-        # 从环境变量中读取 AWS 配置
         aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
         aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
         region_name = os.getenv('AWS_REGION')
@@ -65,7 +58,6 @@ def get_sqs_client():
         if not all([aws_access_key_id, aws_secret_access_key, region_name]):
             raise ValueError("缺少必要的环境变量: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION")
 
-        # 创建 SQS 客户端
         sqs = boto3.client(
             'sqs',
             region_name=region_name,
@@ -93,7 +85,7 @@ def process_sqs_message():
         response = sqs.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=1,  # 每次最多接收一条消息
-            WaitTimeSeconds=20      # 长轮询等待时间
+            WaitTimeSeconds=10      # 长轮询等待时间
         )
 
         if 'Messages' not in response:
@@ -108,7 +100,7 @@ def process_sqs_message():
 
         try:
             print("解码 Base64 图片数据...")
-            # 假设消息体是 Base64 编码的图片数据
+            # 解码 Base64 数据
             image_data = base64.b64decode(body)
             image = Image.open(io.BytesIO(image_data))
 
@@ -137,4 +129,5 @@ def process_sqs_message():
             print("消息已删除")
 
 # 启动消息处理
-process_sqs_message()
+if __name__ == "__main__":
+    process_sqs_message()
